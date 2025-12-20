@@ -3,15 +3,37 @@ export PATH="$PATH:/Users/mtezcan/.local/scripts"
 export PATH="$PATH:/Users/mtezcan/go/bin"
 export LC_CTYPE="en_US.UTF-8"
 export XDG_CONFIG_HOME=$HOME/.config
-export HISTCONTROL=ignoreboth:erasedups
 alias vim="nvim"
+
+# Zsh history configuration
+setopt HIST_IGNORE_ALL_DUPS      
+setopt HIST_FIND_NO_DUPS         
+setopt HIST_IGNORE_SPACE         
+setopt HIST_IGNORE_DUPS         
+setopt HIST_REDUCE_BLANKS        
+setopt SHARE_HISTORY              
+setopt HIST_VERIFY                
+
+HISTSIZE=10000
+SAVEHIST=10000
+HISTFILE=~/.zsh_history
+
+zshaddhistory() {
+  local line="${1%%$'\n'}"
+  local cmd="${line%% *}"
+  
+  case "${cmd:l}" in
+    ls|cd|pwd|clear|exit|history|h|ll|la|..|...|....|.....)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
 
 # Where should I put you?
 bindkey -s ^f "tmux-sessionizer\n"
 
 # Brew
 eval $(/opt/homebrew/bin/brew shellenv)
-
-
-# Fuck
-eval $(thefuck --alias)
