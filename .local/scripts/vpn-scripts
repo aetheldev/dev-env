@@ -3,6 +3,12 @@
 set -euo pipefail
 
 STATE_FILE="/tmp/vpn-scripts-state"
+OPENVPN_PROCESS="OpenVPN Connect"
+
+# Configuration
+INITIAL_DELAY=1.0        # Delay after clicking Connect before pasting
+CONNECTION_TIMEOUT=5     # Max seconds to wait for connection verification
+MAX_RETRIES=2           # Number of connection retry attempts
 
 set_state() {
   echo "$1" > "$STATE_FILE"
@@ -14,6 +20,11 @@ get_state() {
   else
     echo "disconnected"
   fi
+}
+
+# Check if OpenVPN Connect is running
+is_openvpn_running() {
+  pgrep -x "$OPENVPN_PROCESS" > /dev/null 2>&1
 }
 
 # Verify if OpenVPN is actually connected by checking system state
@@ -70,77 +81,207 @@ get_status() {
 }
 
 vpn_connect() {
+  # Check if OpenVPN Connect is running
+  if ! is_openvpn_running; then
+    echo "Error: OpenVPN Connect is not running" >&2
+    return 1
+  fi
+
+  # Generate 2FA code
   local code2fa
   code2fa="2457$(2fa 'mgc')"
-
-  osascript -e 'tell application "System Events" to tell process "OpenVPN Connect" to tell menu bar item 1 of menu bar 2' \
-    -e 'click' \
-    -e 'get menu items of menu 1' \
-    -e 'try
-        click menu item "Connect" of menu 1
-        do shell script "echo OpenVPN ready to connect"
-      on error
-        key code 53
-        do shell script "echo Already connected"
-      end try' \
-    -e "delay 0.5
-        set textBuffer to \"$code2fa\"
-        repeat with i from 1 to count characters of textBuffer
-          keystroke (character i of textBuffer)
-          delay 0.05
-        end repeat" \
-    -e 'keystroke return' \
-    -e 'end tell'
-
-  # Wait a moment for connection to establish, then verify
-  sleep 2
-  if verify_actual_connection; then
-    set_state "connected"
-  else
-    set_state "disconnected"
+  
+  if [[ -z "$code2fa" || ${#code2fa} -lt 4 ]]; then
+    echo "Error: Failed to generate 2FA code" >&2
+    return 1
   fi
+
+  # Save current clipboard content to restore later
+  local saved_clipboard
+  saved_clipboard=$(pbpaste 2>/dev/null || echo "")
+
+  # Copy 2FA code to clipboard
+  echo -n "$code2fa" | pbcopy
+
+  # Attempt connection with retry logic
+  local attempt=1
+  local success=false
+
+  while [[ $attempt -le $MAX_RETRIES ]] && [[ "$success" == "false" ]]; do
+    echo "Connection attempt $attempt of $MAX_RETRIES..."
+
+    # Use AppleScript to click Connect and paste the code
+    if osascript <<EOF
+tell application "System Events"
+  tell process "$OPENVPN_PROCESS"
+    tell menu bar item 1 of menu bar 2
+      click
+      delay 0.3
+      
+      try
+        click menu item "Connect" of menu 1
+        delay $INITIAL_DELAY
+        
+        -- Paste the 2FA code from clipboard (much faster than typing)
+        keystroke "v" using command down
+        delay 0.2
+        keystroke return
+        
+        return true
+      on error errMsg
+        -- Close menu if still open
+        key code 53
+        error "Failed to connect: " & errMsg
+      end try
+    end tell
+  end tell
+end tell
+EOF
+    then
+      # Wait for connection to establish
+      echo "Waiting for connection to establish..."
+      local waited=0
+      while [[ $waited -lt $CONNECTION_TIMEOUT ]]; do
+        sleep 1
+        waited=$((waited + 1))
+        if verify_actual_connection; then
+          success=true
+          break
+        fi
+      done
+
+      if [[ "$success" == "true" ]]; then
+        set_state "connected"
+        echo "Successfully connected to VPN"
+        break
+      else
+        echo "Connection verification failed on attempt $attempt"
+      fi
+    else
+      echo "AppleScript execution failed on attempt $attempt" >&2
+    fi
+
+    attempt=$((attempt + 1))
+    if [[ $attempt -le $MAX_RETRIES ]] && [[ "$success" == "false" ]]; then
+      echo "Retrying in 2 seconds..."
+      sleep 2
+    fi
+  done
+
+  # Restore original clipboard content
+  echo -n "$saved_clipboard" | pbcopy 2>/dev/null || true
+
+  if [[ "$success" == "false" ]]; then
+    set_state "disconnected"
+    echo "Failed to connect to VPN after $MAX_RETRIES attempts" >&2
+    return 1
+  fi
+
+  return 0
 }
 
 vpn_disconnect() {
-  osascript -e 'tell application "System Events" to tell process "OpenVPN Connect" to tell menu bar item 1 of menu bar 2' \
-    -e 'click' \
-    -e 'get menu items of menu 1' \
-    -e 'try
-        click menu item "Disconnect" of menu 1
-      on error
-        key code 53
-      end try' \
-    -e 'end tell'
-
-  # Wait a moment for disconnection, then verify
-  sleep 1
-  if ! verify_actual_connection; then
+  # Check if OpenVPN Connect is running
+  if ! is_openvpn_running; then
+    echo "Error: OpenVPN Connect is not running" >&2
     set_state "disconnected"
+    return 1
+  fi
+
+  echo "Disconnecting from VPN..."
+
+  # Use AppleScript to click Disconnect
+  if osascript <<EOF
+tell application "System Events"
+  tell process "$OPENVPN_PROCESS"
+    tell menu bar item 1 of menu bar 2
+      click
+      delay 0.3
+      
+      try
+        click menu item "Disconnect" of menu 1
+        return true
+      on error errMsg
+        -- Close menu if still open
+        key code 53
+        error "Failed to disconnect: " & errMsg
+      end try
+    end tell
+  end tell
+end tell
+EOF
+  then
+    # Wait for disconnection and verify
+    echo "Waiting for disconnection..."
+    local waited=0
+    local max_wait=3
+    while [[ $waited -lt $max_wait ]]; do
+      sleep 1
+      waited=$((waited + 1))
+      if ! verify_actual_connection; then
+        set_state "disconnected"
+        echo "Successfully disconnected from VPN"
+        return 0
+      fi
+    done
+
+    # Still connected after timeout
+    if verify_actual_connection; then
+      echo "Warning: VPN still appears to be connected" >&2
+      set_state "connected"
+      return 1
+    else
+      set_state "disconnected"
+      echo "Successfully disconnected from VPN"
+      return 0
+    fi
   else
-    set_state "connected"
+    echo "AppleScript execution failed" >&2
+    # Check actual state regardless
+    if ! verify_actual_connection; then
+      set_state "disconnected"
+    fi
+    return 1
   fi
 }
 
 show_usage() {
   cat << EOF
-Usage: $0 [-c|-x|-s]
-  -c  Connect to VPN
+Usage: $0 [-c|-x|-s|-h]
+  -c  Connect to VPN (with retry logic)
   -x  Disconnect from VPN
   -s  Check VPN status (verifies actual connection)
+  -h  Show this help message
+
+Environment variables (optional):
+  VPN_INITIAL_DELAY      - Delay after clicking Connect (default: $INITIAL_DELAY)
+  VPN_CONNECTION_TIMEOUT - Max wait time for connection (default: $CONNECTION_TIMEOUT)
+  VPN_MAX_RETRIES       - Number of retry attempts (default: $MAX_RETRIES)
 EOF
   exit 1
 }
+
+# Allow environment variable overrides
+INITIAL_DELAY="${VPN_INITIAL_DELAY:-$INITIAL_DELAY}"
+CONNECTION_TIMEOUT="${VPN_CONNECTION_TIMEOUT:-$CONNECTION_TIMEOUT}"
+MAX_RETRIES="${VPN_MAX_RETRIES:-$MAX_RETRIES}"
 
 # Main execution
 case "${1:-}" in
   -c)
     vpn_connect
+    exit $?
     ;;
   -x)
     vpn_disconnect
+    exit $?
     ;;
   -s)
     get_status
+    exit 0
+    ;;
+  -h|--help)
+    show_usage
     ;;
   *)
     show_usage
