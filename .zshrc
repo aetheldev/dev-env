@@ -12,22 +12,8 @@ source $HOME/.zsh_profile
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 export NVM_DIR="$HOME/.nvm"
-nvm() {
-  unset -f nvm node npm
-  [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
-  [ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
-  nvm "$@"
-}
-node() {
-  unset -f nvm node npm
-  [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
-  node "$@"
-}
-npm() {
-  unset -f nvm node npm
-  [ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
-  npm "$@"
-}
+[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
 
 # pq
 export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
@@ -42,4 +28,3 @@ export LIBRARY_PATH="/opt/homebrew/lib"
 export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
 export LLVM_CONFIG="/opt/homebrew/opt/llvm/bin/llvm-config"
 export PATH="/Users/mtezcan/Odin:$PATH"
-
